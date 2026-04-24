@@ -1,0 +1,55 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------- Users --------
+    // Each authenticated user can:
+    //   • read their OWN profile
+    //   • create their own profile at signup
+    //   • update their own name/jamatkhana (but NOT role, scope, or suspended)
+    // Super Admin can:
+    //   • read EVERY profile (to render the Users page)
+    //   • create a profile on someone else's behalf (Invite user flow)
+    //   • write any field on any profile
+    //   • delete any profile
+    match /users/{uid} {
+      allow read:   if request.auth != null
+                      && (request.auth.uid == uid || isSuperAdmin());
+      allow create: if request.auth != null
+                      && (request.auth.uid == uid || isSuperAdmin());
+      allow update: if request.auth != null && (
+        (request.auth.uid == uid
+          && !("role"      in request.resource.data.diff(resource.data).affectedKeys())
+          && !("scope"     in request.resource.data.diff(resource.data).affectedKeys())
+          && !("suspended" in request.resource.data.diff(resource.data).affectedKeys()))
+        || isSuperAdmin()
+      );
+      allow delete: if isSuperAdmin();
+    }
+
+    // -------- Shared collections --------
+    // All approved team members (Coordinator, JK Admin, Super Admin) can read/write.
+    // Suspension is enforced in the app layer; rules stay simple so a missing
+    // `suspended` field on legacy profiles doesn't trip reads.
+    match /members/{id}      { allow read, write: if isTeam(); }
+    match /schedules/{id}    { allow read, write: if isTeam(); }
+    match /majlis/{id}       { allow read, write: if isTeam(); }
+
+    // -------- Helpers --------
+    function userRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+    function isTeam() {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        userRole() in ["team", "jk_admin", "admin"];
+    }
+    function isSuperAdmin() {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        userRole() == "admin";
+    }
+    // Back-compat alias
+    function isAdmin() { return isSuperAdmin(); }
+  }
+}
